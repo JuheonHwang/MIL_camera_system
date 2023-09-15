@@ -1,0 +1,261 @@
+#include <mil.h>
+#include <iostream>
+#include <filesystem>
+#include <sstream>
+#include <iomanip>
+#include <queue>
+#include <thread>
+#include <atomic>
+#include <shared_mutex>
+#include <windows.h>
+
+#define N_FRAME 45
+#define N_THREAD 30
+
+using namespace std;
+using std::thread;
+
+MIL_INT MFTYPE ProcessingFunction(MIL_INT HookType, MIL_ID HookId, void* HookDataPtr);
+void saveQueue(atomic <bool>& stop);
+void pushQueue(MIL_ID GrabImage, MIL_INT system_location, int save_idx, int digit_idx);
+
+vector<string> split(string input, char delimiter) {
+	vector<string> answer;
+	stringstream ss(input);
+	string temp;
+
+	while (getline(ss, temp, delimiter)) {
+		answer.push_back(temp);
+	}
+
+	return answer;
+}
+
+MIL_DOUBLE round_digit(MIL_DOUBLE num, int d)
+{
+	MIL_DOUBLE t = pow(10, d - 1);
+	return floor(num * t) / t;
+}
+
+typedef struct
+{
+	MIL_ID GrabImage;
+	MIL_INT system_location;
+	int save_idx;
+	int digit_idx;
+} QueueStruct;
+
+typedef struct
+{
+	MIL_INT ProcessedImageCount;
+	MIL_INT system_location;
+	int save_idx;
+	int digit_idx;
+	MIL_INT64 Height;
+	MIL_INT64 Width;
+} HookDataStruct;
+
+queue<QueueStruct> save_queue;
+shared_mutex sharedMutex;
+
+int MosMain() {
+	MIL_ID MilApplication;
+	MIL_ID MilSystem;
+	MIL_ID MilDisplay;
+	MIL_ID MilImage;
+	MIL_ID MilDigitizer;
+	HookDataStruct UserHookData;
+	MIL_INT ProcessFrameCount;
+	MIL_INT ProcessFrameMissedCount;
+	MIL_DOUBLE ProcessFrameRate;
+	atomic<bool> stop = false;
+
+	MappAlloc(M_NULL, M_DEFAULT, &MilApplication);
+
+	MsysAlloc(M_SYSTEM_RAPIXOCXP, M_DEV2, M_DEFAULT, &MilSystem);
+	MsysControl(MilSystem, M_MODIFIED_BUFFER_HOOK_MODE, M_MULTI_THREAD);
+	MdispAlloc(MilSystem, M_DEFAULT, MIL_TEXT("M_DEFAULT"), M_WINDOWED, &MilDisplay);
+	MdigAlloc(MilSystem, M_DEV0, MIL_TEXT("M_DEFAULT"), M_DEFAULT, &MilDigitizer);
+
+
+	MIL_INT64 Height = 5120;
+	MdigControlFeature(MilDigitizer, M_FEATURE_VALUE, MIL_TEXT("Height"), M_TYPE_INT64, &Height);
+	MdigControl(MilDigitizer, M_SOURCE_SIZE_Y, Height);
+
+	MIL_INT64 Width = 5120;
+	MdigControlFeature(MilDigitizer, M_FEATURE_VALUE, MIL_TEXT("Width"), M_TYPE_INT64, &Width);
+	MdigControl(MilDigitizer, M_SOURCE_SIZE_X, Width);
+
+	MdigControlFeature(MilDigitizer, M_FEATURE_VALUE, MIL_TEXT("PixelFormat"), M_TYPE_STRING, MIL_TEXT("BayerGB8"));
+	//MdigControlFeature(MilDigitizer, M_FEATURE_VALUE, MIL_TEXT("PixelFormat"), M_TYPE_STRING, MIL_TEXT("Mono8"));
+
+	MIL_DOUBLE ExposureTime = 30000;
+	MdigControlFeature(MilDigitizer, M_FEATURE_VALUE, MIL_TEXT("ExposureTime"), M_TYPE_DOUBLE, &ExposureTime);
+
+	MIL_DOUBLE AcquisitionFrameRate = 30;
+	MdigControlFeature(MilDigitizer, M_FEATURE_VALUE, MIL_TEXT("AcquisitionFrameRate"), M_TYPE_DOUBLE, &AcquisitionFrameRate);
+
+	MbufAllocColor(MilSystem, (MIL_INT)(MdigInquire(MilDigitizer, M_SIZE_BAND, M_NULL)), (MIL_INT)(MdigInquire(MilDigitizer, M_SIZE_X, M_NULL)), (MIL_INT)(MdigInquire(MilDigitizer, M_SIZE_Y, M_NULL)), 8 + M_UNSIGNED, M_IMAGE + M_DISP + M_GRAB, &MilImage);
+	//MbufAlloc2d(MilSystem, (MIL_INT)(MdigInquire(MilDigitizer, M_SIZE_X, M_NULL)), (MIL_INT)(MdigInquire(MilDigitizer, M_SIZE_Y, M_NULL)), 8 + M_UNSIGNED, M_IMAGE + M_DISP + M_GRAB, &MilImage);
+
+	MbufClear(MilImage, 0L);
+
+
+	MdigControlFeature(MilDigitizer, M_FEATURE_VALUE, MIL_TEXT("TriggerSelector"), M_TYPE_STRING, MIL_TEXT("ExposureStart"));
+	MdigControlFeature(MilDigitizer, M_FEATURE_VALUE, MIL_TEXT("TriggerMode"), M_TYPE_STRING, MIL_TEXT("On"));
+	MdigControlFeature(MilDigitizer, M_FEATURE_VALUE, MIL_TEXT("TriggerSource"), M_TYPE_STRING, MIL_TEXT("LinkTrigger0"));
+	MdigControlFeature(MilDigitizer, M_FEATURE_VALUE, MIL_TEXT("TriggerActivation"), M_TYPE_STRING, MIL_TEXT("RisingEdge"));
+
+	MdigControl(MilDigitizer, M_IO_MODE + M_AUX_IO4, M_INPUT);
+	MdigControl(MilDigitizer, M_TL_TRIGGER_ACTIVATION, M_DEFAULT);
+	MdigControl(MilDigitizer, M_IO_SOURCE + M_TL_TRIGGER, M_AUX_IO4);
+
+
+	MIL_ID MilImageBuf[N_FRAME];
+	for (int n = 0; n < N_FRAME; n++)
+	{
+		MbufAllocColor(MilSystem, (MIL_INT)(MdigInquire(MilDigitizer, M_SIZE_BAND, M_NULL)), (MIL_INT)(MdigInquire(MilDigitizer, M_SIZE_X, M_NULL)), (MIL_INT)(MdigInquire(MilDigitizer, M_SIZE_Y, M_NULL)), 8 + M_UNSIGNED, M_IMAGE + M_GRAB, &MilImageBuf[n]);
+		//MbufAlloc2d(MilSystem, (MIL_INT)(MdigInquire(MilDigitizer, M_SIZE_X, M_NULL)), (MIL_INT)(MdigInquire(MilDigitizer, M_SIZE_Y, M_NULL)), 8 + M_UNSIGNED, M_IMAGE + M_GRAB, &MilImageBuf[n]);
+
+		if (!MilImageBuf[n]) {
+			cout << "Allocation Failed\n";
+			exit(-1);
+		}
+
+		MbufClear(MilImageBuf[n], 0L);
+	}
+
+	UserHookData.ProcessedImageCount = 0;
+	UserHookData.system_location = MsysInquire(MilSystem, M_DISTRIBUTED_MIL_TYPE, M_NULL);
+	UserHookData.save_idx = 0;
+	UserHookData.digit_idx = 1;
+	UserHookData.Height = Height;
+	UserHookData.Width = Width;
+
+
+	MdigControl(MilDigitizer, M_GRAB_FRAME_MISSED_RESET, M_DEFAULT);
+
+	MosPrintf(MIL_TEXT("Press Any Key to Start Process...\n"));
+	MosGetch();
+
+	MdigProcess(MilDigitizer, MilImageBuf, N_FRAME, M_START, M_TRIGGER_FOR_FIRST_GRAB, ProcessingFunction, &UserHookData);
+
+
+	thread t[N_THREAD];
+	for (int n = 0; n < N_THREAD; n++)
+	{
+		t[n] = thread(saveQueue, ref(stop));
+	}
+
+	MosPrintf(MIL_TEXT("Press Any Key to Stop Process...\n"));
+	MosGetch();
+
+	stop = true;
+	for (int n = 0; n < N_THREAD; n++)
+	{
+		t[n].join();
+	}
+
+
+	MdigProcess(MilDigitizer, MilImageBuf, N_FRAME, M_STOP, M_DEFAULT, ProcessingFunction, &UserHookData);
+
+	MdigInquire(MilDigitizer, M_PROCESS_FRAME_COUNT, &ProcessFrameCount);
+
+	MdigInquire(MilDigitizer, M_PROCESS_FRAME_MISSED, &ProcessFrameMissedCount);
+
+	MdigInquire(MilDigitizer, M_PROCESS_FRAME_RATE, &ProcessFrameRate);
+
+	MosPrintf(MIL_TEXT("First Digitizer: %d frames grabbed at %.1f frames/sec, %d frames missed\n"), (int)ProcessFrameCount, ProcessFrameRate, ProcessFrameMissedCount);
+
+
+	MosPrintf(MIL_TEXT("Process Done!\n"));
+	MosGetch();
+
+
+	for (int n = 0; n < N_FRAME; n++)
+	{
+		MbufFree(MilImageBuf[n]);
+	}
+
+
+	MbufFree(MilImage);
+	MdispFree(MilDisplay);
+	MdigFree(MilDigitizer);
+	MsysFree(MilSystem);
+	MappFree(MilApplication);
+
+	return 0;
+}
+
+MIL_INT MFTYPE ProcessingFunction(MIL_INT HookType, MIL_ID HookId, void* HookDataPtr)
+{
+
+	HookDataStruct* UserHookDataPtr = (HookDataStruct*)HookDataPtr;
+	MIL_ID SaveBufferId, QueueId;
+	UserHookDataPtr->ProcessedImageCount++;
+
+	MdigGetHookInfo(HookId, M_MODIFIED_BUFFER + M_BUFFER_ID, &SaveBufferId);
+
+	MbufClone(SaveBufferId, M_DEFAULT, M_DEFAULT, M_DEFAULT, M_DEFAULT, M_IMAGE + M_HOST_MEMORY + M_OFF_BOARD, M_COPY_SOURCE_DATA, &QueueId);
+
+	pushQueue(QueueId, UserHookDataPtr->system_location, UserHookDataPtr->save_idx + (int)UserHookDataPtr->ProcessedImageCount, UserHookDataPtr->digit_idx);
+
+	return 0;
+}
+
+void pushQueue(MIL_ID GrabImage, MIL_INT system_location, int save_idx, int digit_idx)
+{
+	lock_guard lk(sharedMutex);
+
+	QueueStruct queue_entry = { GrabImage, system_location, save_idx, digit_idx };
+	//queue_entry.GrabImage = GrabImage;
+	//queue_entry.system_location = system_location;
+	//queue_entry.save_idx = save_idx;
+	//queue_entry.digit_idx = digit_idx;
+
+	save_queue.push(queue_entry);
+}
+
+void saveQueue(atomic <bool>& stop)
+{
+	while (true)
+	{
+		if (!save_queue.empty())
+		{
+			unique_lock lk(sharedMutex);
+
+			QueueStruct front_queue = save_queue.front();
+			save_queue.pop();
+
+			lk.unlock();
+
+			stringstream s_idx;
+			s_idx << setw(2) << setfill('0') << front_queue.save_idx;
+			string save_idx = s_idx.str();
+
+			MIL_STRING_STREAM stream;
+
+			if (front_queue.system_location == M_DMIL_REMOTE)
+			{
+				stream << MIL_TEXT("remote:///") << MIL_TEXT("C:/output_image/") << stoi(save_idx) << MIL_TEXT("_") << front_queue.digit_idx << MIL_TEXT(".tiff");
+			}
+			else {
+				stream << MIL_TEXT("C:/output_image/") << stoi(save_idx) << MIL_TEXT("_") << front_queue.digit_idx << MIL_TEXT(".tiff");
+			}
+
+
+			MIL_STRING file_name = stream.str();
+			MbufSave(file_name, front_queue.GrabImage);
+
+			MbufFree(front_queue.GrabImage);
+		}
+		else {
+			if (stop) {
+				break;
+			}
+
+			MosPrintf(MIL_TEXT("Wait for grabbing...\n"));
+			Sleep(500);
+		}
+	}
+}
