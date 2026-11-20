@@ -1,0 +1,2 @@
+add_mil_example(03_dmil_allocation_check dmil_allocation_check.cpp)
+add_mil_example(03_dmil_live_view dmil_live_view.cpp)

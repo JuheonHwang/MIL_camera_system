@@ -1,0 +1,1 @@
+add_mil_example(11_serial_trigger_capture serial_trigger_capture.cpp)

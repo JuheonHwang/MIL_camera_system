@@ -1,0 +1,2 @@
+add_mil_example(10_color_capture color_capture.cpp)
+add_mil_example(10_roi_capture roi_capture.cpp)

@@ -1,0 +1,1 @@
+add_mil_example(08_remote_save_and_move remote_save_and_move.cpp)

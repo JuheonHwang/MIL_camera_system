@@ -1,0 +1,4 @@
+add_mil_example(05_grab_trigger 05_grab_trigger.cpp)
+add_mil_example(05_camera_trigger 05_camera_trigger.cpp)
+add_mil_example(05_trigger_timer 05_trigger_timer.cpp)
+add_mil_example(05_trigger_threads 05_trigger_threads.cpp)

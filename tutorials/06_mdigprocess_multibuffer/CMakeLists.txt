@@ -1,0 +1,1 @@
+add_mil_example(06_mdigprocess_multibuffer mdigprocess_multibuffer.cpp)
