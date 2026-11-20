@@ -1,0 +1,2 @@
+add_mil_example(multi_camera_continuous_capture continuous_capture.cpp)
+add_mil_example(multi_camera_single_shot_capture single_shot_capture.cpp)

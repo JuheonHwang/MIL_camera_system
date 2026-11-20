@@ -1,0 +1,1 @@
+add_mil_example(02_two_camera_live two_camera_live.cpp)

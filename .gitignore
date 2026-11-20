@@ -1,0 +1,28 @@
+# Build output
+build/
+out/
+x64/
+Debug/
+Release/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+CMakeSettings.json
+CMakeUserPresets.json
+
+# Captured images
+output_image/
+*.tiff
+*.tif
+*.bmp
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/

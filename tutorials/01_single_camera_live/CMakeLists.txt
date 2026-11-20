@@ -1,0 +1,1 @@
+add_mil_example(01_single_camera_live single_camera_live.cpp)
